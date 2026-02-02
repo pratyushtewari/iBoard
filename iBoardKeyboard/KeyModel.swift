@@ -29,6 +29,7 @@ struct KeyModel {
     var frame: CGRect
     var isHighlighted: Bool = false
     var longPressActions: [String]? // For secondary symbols
+    var isInputModeSwitcher: Bool = false // For emoji/keyboard switcher
     
     var displayText: String {
         switch type {

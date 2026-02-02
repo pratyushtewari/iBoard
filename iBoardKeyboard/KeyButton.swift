@@ -79,8 +79,9 @@ class KeyButton: UIButton {
     
     private func setupGestures() {
         addTarget(self, action: #selector(touchDown), for: .touchDown)
-        addTarget(self, action: #selector(touchUp), for: [.touchUpInside, .touchUpOutside])
+        addTarget(self, action: #selector(touchUp), for: [.touchUpInside, .touchUpOutside, .touchCancel])
         addTarget(self, action: #selector(buttonTapped), for: .touchUpInside)
+        addTarget(self, action: #selector(touchDragExit), for: .touchDragExit)
     }
     
     @objc private func touchDown() {
@@ -96,9 +97,18 @@ class KeyButton: UIButton {
             longPressTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: false) { [weak self] _ in
                 guard let self = self else { return }
                 self.isLongPressing = true
+                if UserDefaultsManager.shared.enableHapticFeedback {
+                    self.feedbackGenerator.impactOccurred()
+                }
                 self.delegate?.keyButtonLongPressed(self, key: self.keyModel)
             }
         }
+    }
+    
+    @objc private func touchDragExit() {
+        // Cancel long press if finger drags out
+        longPressTimer?.invalidate()
+        longPressTimer = nil
     }
     
     @objc private func touchUp() {

@@ -30,6 +30,10 @@ class KeyboardViewController: UIInputViewController {
     private var currentText: String = ""
     private var lastDeletedText: String = ""
     
+    override var needsInputModeSwitchKey: Bool {
+        return false // We handle it manually with emoji button
+    }
+    
     // MARK: - Lifecycle
     
     override func viewDidLoad() {
@@ -245,30 +249,21 @@ class KeyboardViewController: UIInputViewController {
         keyboardView.addSubview(numberToggleButton)
         keyButtons.append(numberToggleButton)
         
-        // Emoji button
-        let emojiWidth: CGFloat = 40
+        // Emoji button - marked as input mode switcher for iOS
+        let emojiWidth: CGFloat = 38
         let emojiX = numberToggleWidth + spacing + 2
         let emojiFrame = CGRect(x: emojiX, y: yPosition, width: emojiWidth, height: keyHeight)
-        let emojiKey = KeyModel(type: .emoji, frame: emojiFrame)
+        var emojiKey = KeyModel(type: .emoji, frame: emojiFrame)
+        emojiKey.isInputModeSwitcher = true
         let emojiButton = KeyButton(key: emojiKey)
         emojiButton.delegate = self
         keyboardView.addSubview(emojiButton)
         keyButtons.append(emojiButton)
         
-        // Globe button
-        let globeWidth: CGFloat = 40
-        let globeX = emojiX + emojiWidth + spacing
-        let globeFrame = CGRect(x: globeX, y: yPosition, width: globeWidth, height: keyHeight)
-        let globeKey = KeyModel(type: .special(.globe), frame: globeFrame)
-        let globeButton = KeyButton(key: globeKey)
-        globeButton.delegate = self
-        keyboardView.addSubview(globeButton)
-        keyButtons.append(globeButton)
-        
-        // Space bar
-        let returnWidth: CGFloat = 80
-        let periodWidth: CGFloat = 40
-        let spaceX = globeX + globeWidth + spacing
+        // Space bar (expanded - no globe button)
+        let returnWidth: CGFloat = 75
+        let periodWidth: CGFloat = 38
+        let spaceX = emojiX + emojiWidth + spacing
         let spaceWidth = width - spaceX - returnWidth - periodWidth - spacing * 2 - 2
         let spaceFrame = CGRect(x: spaceX, y: yPosition, width: spaceWidth, height: keyHeight)
         let spaceKey = KeyModel(type: .special(.space), frame: spaceFrame)
@@ -277,13 +272,13 @@ class KeyboardViewController: UIInputViewController {
         keyboardView.addSubview(spaceButton)
         keyButtons.append(spaceButton)
         
-        // Period with long-press menu
+        // Period with long-press menu - Updated symbols: . , ! & ( ) @
         let periodX = spaceX + spaceWidth + spacing
         let periodFrame = CGRect(x: periodX, y: yPosition, width: periodWidth, height: keyHeight)
         let periodKey = KeyModel(
             type: .character(primary: ".", secondary: nil),
             frame: periodFrame,
-            longPressActions: [".", ",", "?", "!", "'", "\"", "-", "@", "_", ";", "/"]
+            longPressActions: [".", ",", "!", "&", "(", ")", "@"]
         )
         let periodButton = KeyButton(key: periodKey)
         periodButton.delegate = self
@@ -308,8 +303,13 @@ class KeyboardViewController: UIInputViewController {
             
             switch direction {
             case .left:
+                // Swipe left - delete character
                 self.deleteCharacter()
-            case .right, .down:
+            case .right:
+                // Swipe right - undo
+                self.performUndo()
+            case .down:
+                // Swipe down - undo
                 self.performUndo()
             }
         }
@@ -347,7 +347,9 @@ class KeyboardViewController: UIInputViewController {
         // Save deleted text for undo
         if let beforeContext = textDocumentProxy.documentContextBeforeInput,
            !beforeContext.isEmpty {
-            lastDeletedText = String(beforeContext.last!)
+            let deletedChar = String(beforeContext.last!)
+            lastDeletedText = deletedChar
+            deleteManager.addToCurrentDeletion(deletedChar)
         }
         
         textDocumentProxy.deleteBackward()
@@ -383,9 +385,11 @@ class KeyboardViewController: UIInputViewController {
         }
         
         // Save for undo
-        let endIndex = beforeContext.index(beforeContext.endIndex, offsetBy: -deleteCount, limitedBy: beforeContext.startIndex)
-        if let endIndex = endIndex {
-            lastDeletedText = String(beforeContext[endIndex...])
+        if deleteCount > 0 {
+            let startIndex = beforeContext.index(beforeContext.endIndex, offsetBy: -deleteCount)
+            let deletedText = String(beforeContext[startIndex...])
+            lastDeletedText = deletedText
+            deleteManager.addToCurrentDeletion(deletedText)
         }
         
         for _ in 0..<deleteCount {
@@ -414,9 +418,11 @@ class KeyboardViewController: UIInputViewController {
         }
         
         // Save for undo
-        let endIndex = beforeContext.index(beforeContext.endIndex, offsetBy: -deleteCount, limitedBy: beforeContext.startIndex)
-        if let endIndex = endIndex {
-            lastDeletedText = String(beforeContext[endIndex...])
+        if deleteCount > 0 {
+            let startIndex = beforeContext.index(beforeContext.endIndex, offsetBy: -deleteCount)
+            let deletedText = String(beforeContext[startIndex...])
+            lastDeletedText = deletedText
+            deleteManager.addToCurrentDeletion(deletedText)
         }
         
         for _ in 0..<deleteCount {
@@ -428,6 +434,15 @@ class KeyboardViewController: UIInputViewController {
     }
     
     private func performUndo() {
+        // First try to undo from delete manager's undo stack
+        if let undoText = deleteManager.popFromUndoStack() {
+            textDocumentProxy.insertText(undoText)
+            predictionBar?.hideUndo()
+            updatePredictions()
+            return
+        }
+        
+        // Fallback to lastDeletedText
         guard !lastDeletedText.isEmpty else { return }
         
         textDocumentProxy.insertText(lastDeletedText)
@@ -556,12 +571,31 @@ extension KeyboardViewController: KeyButtonDelegate {
         }
     }
     
+    // Add method to track touch movement
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
+        super.touchesMoved(touches, with: event)
+        
+        guard let touch = touches.first else { return }
+        let location = touch.location(in: keyboardView)
+        
+        // Check if we're tracking backspace swipe
+        if UserDefaultsManager.shared.enableSwipeGestures {
+            swipeGestureManager.touchMoved(to: location)
+        }
+    }
+    
     private func handleSpecialKey(_ type: SpecialKeyType) {
         switch type {
         case .shift:
             toggleShift()
             
         case .backspace:
+            // Single tap backspace - record for individual undo
+            if let beforeContext = textDocumentProxy.documentContextBeforeInput,
+               !beforeContext.isEmpty {
+                let deletedChar = String(beforeContext.last!)
+                deleteManager.recordSingleDelete(deletedChar)
+            }
             deleteCharacter()
             
         case .space:
@@ -589,8 +623,9 @@ extension KeyboardViewController: KeyButtonDelegate {
     }
     
     private func handleEmojiKey() {
-        // Switch to emoji keyboard
-        advanceToNextInputMode()
+        // Request emoji keyboard switch
+        // The proper way is to use the globe key behavior
+        self.advanceToNextInputMode()
     }
 }
 

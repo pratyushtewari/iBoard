@@ -21,6 +21,9 @@ class DeleteManager {
     private var isDeleting = false
     private var deleteStartTime: Date?
     
+    // Track current deletion session
+    private var currentDeletionBuffer: String = ""
+    
     // Undo stack
     private var undoStack: [String] = []
     private let maxUndoStackSize = 50
@@ -34,6 +37,7 @@ class DeleteManager {
         isDeleting = true
         deleteStartTime = Date()
         deleteCount = 0
+        currentDeletionBuffer = "" // Start new deletion session
         
         // Initial delete
         delegate?.shouldDeleteCharacter()
@@ -51,6 +55,12 @@ class DeleteManager {
         deleteTimer = nil
         deleteStartTime = nil
         deleteCount = 0
+        
+        // Save the deletion buffer to undo stack
+        if !currentDeletionBuffer.isEmpty {
+            pushToUndoStack(currentDeletionBuffer)
+            currentDeletionBuffer = ""
+        }
         
         delegate?.didFinishDeleting()
     }
@@ -74,9 +84,31 @@ class DeleteManager {
         deleteCount += 1
     }
     
+    // MARK: - Single Character Delete
+    
+    func recordSingleDelete(_ deletedChar: String) {
+        // For single tap deletes, add to undo stack immediately
+        pushToUndoStack(deletedChar)
+    }
+    
+    // MARK: - Track deleted text during session
+    
+    func addToCurrentDeletion(_ text: String) {
+        currentDeletionBuffer = text + currentDeletionBuffer
+    }
+    
+    func getCurrentDeletionBuffer() -> String {
+        return currentDeletionBuffer
+    }
+    
+    func clearCurrentDeletionBuffer() {
+        currentDeletionBuffer = ""
+    }
+    
     // MARK: - Undo Management
     
     func pushToUndoStack(_ text: String) {
+        guard !text.isEmpty else { return }
         undoStack.append(text)
         
         // Maintain stack size
@@ -112,14 +144,17 @@ class SwipeGestureManager {
     var onSwipe: ((SwipeDirection) -> Void)?
     
     private var initialTouchPoint: CGPoint?
-    private let swipeThreshold: CGFloat = 30
+    private let swipeThreshold: CGFloat = 20
+    private var hasTriggeredSwipe = false
     
     func touchBegan(at point: CGPoint) {
         initialTouchPoint = point
+        hasTriggeredSwipe = false
     }
     
     func touchMoved(to point: CGPoint) {
         guard let initial = initialTouchPoint else { return }
+        guard !hasTriggeredSwipe else { return }
         
         let deltaX = point.x - initial.x
         let deltaY = point.y - initial.y
@@ -129,13 +164,14 @@ class SwipeGestureManager {
             // Horizontal swipe
             if abs(deltaX) > swipeThreshold {
                 if deltaX < 0 {
-                    // Swipe left - delete
+                    // Swipe left - delete (continuous)
                     onSwipe?(.left)
                     initialTouchPoint = point // Reset for continuous swiping
                 } else {
                     // Swipe right - undo
                     onSwipe?(.right)
-                    initialTouchPoint = nil // Single action
+                    hasTriggeredSwipe = true
+                    initialTouchPoint = nil
                 }
             }
         } else {
@@ -143,12 +179,14 @@ class SwipeGestureManager {
             if deltaY > swipeThreshold {
                 // Swipe down - undo
                 onSwipe?(.down)
-                initialTouchPoint = nil // Single action
+                hasTriggeredSwipe = true
+                initialTouchPoint = nil
             }
         }
     }
     
     func touchEnded() {
         initialTouchPoint = nil
+        hasTriggeredSwipe = false
     }
 }

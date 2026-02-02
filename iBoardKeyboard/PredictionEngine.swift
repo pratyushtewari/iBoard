@@ -97,20 +97,34 @@ class PredictionEngine {
         
         // Check for email pattern (contains @)
         if text.contains("@") {
-            let emailMatches = contactEmails.filter { $0.lowercased().hasPrefix(lowercasedText) }
-            predictions.append(contentsOf: emailMatches.prefix(2))
+            // Match emails that contain the typed text
+            let emailMatches = contactEmails.filter { 
+                $0.lowercased().contains(lowercasedText) || $0.lowercased().hasPrefix(lowercasedText)
+            }
+            predictions.append(contentsOf: emailMatches.prefix(3))
         }
         
         // Check for phone number pattern (starts with digit or +)
         else if text.first?.isNumber ?? false || text.hasPrefix("+") {
             let phoneMatches = contactPhones.filter { $0.hasPrefix(text) }
-            predictions.append(contentsOf: phoneMatches.prefix(2))
+            predictions.append(contentsOf: phoneMatches.prefix(3))
         }
         
-        // Otherwise check names
+        // Otherwise check names, emails, and phones
         else {
+            // First priority: names
             let nameMatches = contactNames.filter { $0.lowercased().hasPrefix(lowercasedText) }
             predictions.append(contentsOf: nameMatches.prefix(2))
+            
+            // Second priority: emails starting with text (before @)
+            if predictions.count < 3 {
+                let emailMatches = contactEmails.filter { 
+                    let emailPrefix = $0.split(separator: "@").first.map(String.init) ?? ""
+                    return emailPrefix.lowercased().hasPrefix(lowercasedText)
+                }
+                let remaining = 3 - predictions.count
+                predictions.append(contentsOf: emailMatches.prefix(remaining))
+            }
         }
         
         return predictions
